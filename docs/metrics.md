@@ -5,6 +5,7 @@ format](https://prometheus.io/docs/instrumenting/exposition_formats/) from both
 the API and the indexer. This page documents the metric names, their labels, and
 how to scrape them.
 
+- [Local observability with Docker Compose](#local-observability-with-docker-compose)
 - [Endpoints](#endpoints)
 - [Metric catalogue](#metric-catalogue)
   - [API](#api)
@@ -17,6 +18,47 @@ how to scrape them.
 - [Grafana dashboard](#grafana-dashboard)
 - [Validating the artifacts](#validating-the-artifacts)
 - [Adding a metric](#adding-a-metric)
+
+---
+
+## Local observability with Docker Compose
+
+From the repository root, generate a Grafana admin password with OpenSSL and
+start the profile. Keep the generated password for future logins and smoke checks.
+
+```bash
+export GRAFANA_ADMIN_PASSWORD="$(openssl rand -hex 32)"
+docker compose --profile observability up -d
+```
+
+Open [Grafana](http://127.0.0.1:3001/d/sorolens-overview) and sign in as `admin`
+with `GRAFANA_ADMIN_PASSWORD`. Grafana provisions the Prometheus datasource
+and the dashboards in `docs/dashboards/` under **Sorolens**. Grafana uses the
+password when it initializes its data volume. For an existing volume, use its
+current admin password.
+
+Prometheus scrapes `api:8080/metrics` and `indexer:9100/metrics` on the Compose
+network. View its [targets](http://127.0.0.1:9090/targets) and
+[alerts](http://127.0.0.1:9090/alerts) in the browser. Prometheus loads and evaluates
+`docs/alerts.yml`, and Grafana shows those rules as datasource-managed alerts.
+
+The API is available at `http://127.0.0.1:8080`. Request-rate and latency panels
+fill after API traffic and a few scrapes. Indexer lag and throughput panels
+depend on tracked contracts and indexing activity. The indexer runs in continuous
+mode and uses the Stellar testnet RPC by default. Set `SOROBAN_RPC_URL_TESTNET` to
+override it.
+
+Run the smoke check in the same shell with Bash, curl, and jq installed. It
+validates the mounted Prometheus config, waits for both targets and rule
+evaluation, and checks Grafana's datasource and provisioned dashboards.
+
+```bash
+docker compose --profile observability config --quiet
+bash scripts/check-observability.sh
+```
+
+Stop the stack with `docker compose --profile observability down`. Named volumes
+retain Prometheus data and Grafana's database.
 
 ---
 
@@ -333,8 +375,9 @@ A ready-to-import dashboard is checked in at
 
 ![Sorolens Overview dashboard in Grafana](screenshots/grafana-sorolens-overview.png)
 
-Import it via **Dashboards → New → Import → Upload JSON file**, then pick the
-Prometheus datasource when prompted (the dashboard input is `DS_PROMETHEUS`).
+For a standalone Grafana instance, import it via **Dashboards → New → Import →
+Upload JSON file**, then select a datasource from the dashboard's **Prometheus**
+dropdown.
 The dashboard covers request rate, latency percentiles, error ratio, in-flight
 requests, indexer lag, indexing throughput, indexer pass duration, goroutines,
 and RSS.
@@ -352,10 +395,9 @@ providers:
       path: /var/lib/grafana/dashboards
 ```
 
-Copy `docs/dashboards/sorolens-overview.json` into that path and set
-`DS_PROMETHEUS` to your datasource UID (or keep the import prompt). The panels
-and the Prometheus rule thresholds use the same metric names, so the dashboard
-and the alerts stay in sync.
+Copy `docs/dashboards/sorolens-overview.json` into that path. The dashboard's
+`DS_PROMETHEUS` variable selects a Prometheus datasource at runtime. The panels
+and Prometheus rule thresholds use the same metric names.
 
 ![Prometheus rule groups loaded from docs/alerts.yml](screenshots/prometheus-sorolens-alerts.png)
 
@@ -371,19 +413,15 @@ CI or locally:
 promtool check rules docs/alerts.yml
 
 # Dashboard JSON: parse and sanity-check required keys.
-jq -e '.title and .panels and .__inputs' docs/dashboards/sorolens-overview.json
-
-# Optional: validate the dashboard against a running Grafana.
-curl -s -u admin:admin http://localhost:3000/api/dashboards/uid/sorolens-overview \
-  | jq -e '.dashboard.title == "Sorolens Overview"'
+jq -e '.uid and .title and (.panels | length > 0)' docs/dashboards/sorolens-overview.json
 ```
 
-If promtool is not installed locally, use the published image from the repo
-root:
+Use the profile's Prometheus image to validate the mounted config and rules
+before starting the stack if promtool is unavailable locally.
 
 ```bash
-docker run --rm --entrypoint promtool \
-  -v "$PWD/docs:/docs:ro" prom/prometheus:latest check rules /docs/alerts.yml
+MSYS_NO_PATHCONV=1 docker compose --profile observability run --rm --no-deps --entrypoint promtool \
+  prometheus check config /etc/prometheus/prometheus.yml
 ```
 
 ---

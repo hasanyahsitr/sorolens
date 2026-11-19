@@ -42,6 +42,9 @@ Postgres and Redis data live in named volumes, so `docker compose down` keeps yo
 
 The indexer, dashboard, and CLI are started the same way as before — see [Local setup per package](#local-setup-per-package).
 
+To run the API and indexer with Prometheus and Grafana in Compose, see the
+[observability profile](docs/metrics.md#local-observability-with-docker-compose).
+
 ---
 
 ## Quickstart: your first PR in 15 minutes

@@ -141,10 +141,92 @@ services:
     networks:
       - sorolens_net
 
+  api:
+    profiles: [observability]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgres://sorolens:sorolens@postgres:5432/sorolens?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      PORT: "8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - sorolens_net
+
+  indexer:
+    profiles: [observability]
+    build:
+      context: .
+      dockerfile: services/indexer/Dockerfile
+    command: ["--mode", "continuous"]
+    environment:
+      DATABASE_URL: postgres://sorolens:sorolens@postgres:5432/sorolens?sslmode=disable
+      SOROBAN_RPC_URL_TESTNET: ${SOROBAN_RPC_URL_TESTNET:-https://soroban-testnet.stellar.org}
+      INDEXER_METRICS_ADDR: ":9100"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - sorolens_net
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.16.0
+    depends_on: [api, indexer]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docs/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - sorolens_prometheus_data:/prometheus
+    networks:
+      - sorolens_net
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:13.3.1
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+    secrets:
+      - grafana_admin_password
+    # Validate inside the profile so unprofiled Compose commands need no password.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        password=$$(cat "$$GF_SECURITY_ADMIN_PASSWORD__FILE")
+        if [ -z "$$password" ] || [ "$$password" = admin ]; then
+          echo 'Set GRAFANA_ADMIN_PASSWORD to a non-default password (see docs/metrics.md).' >&2
+          exit 1
+        fi
+        exec /run.sh
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./deploy/observability/grafana:/etc/grafana/provisioning:ro
+      - ./docs/dashboards:/etc/grafana/dashboards:ro
+      - sorolens_grafana_data:/var/lib/grafana
+    networks:
+      - sorolens_net
+
+secrets:
+  grafana_admin_password:
+    environment: GRAFANA_ADMIN_PASSWORD
+
 volumes:
   sorolens_postgres_data:
   sorolens_minio_data:
   sorolens_redis_data:
+  sorolens_prometheus_data:
+  sorolens_grafana_data:
 
 networks:
   sorolens_net:
